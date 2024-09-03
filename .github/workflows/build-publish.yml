@@ -1,6 +1,4 @@
 # Reusable workflow for building and publishing container images
-name: Build and publish Dev Container Image
-
 on:
   workflow_call:
     inputs:
