@@ -1,0 +1,40 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the README at:
+// https://github.com/microsoft/vscode-dev-containers/tree/v0.245.2/containers/azure-terraform
+{
+	"name": "DEVCONTAINER-BASE",
+	"image": "ghcr.io/sourceupcode/devcontainer-base",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"features": {
+		"ghcr.io/devcontainers-contrib/features/zsh-plugins:0": {},
+		"ghcr.io/devcontainers/features/git-lfs:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
+	},
+	// Configure tool-specific properties.
+	"customizations": {
+		// Configure properties specific to VS Code.
+		"vscode": {
+			// Add the IDs of extensions you want installed when the container is created.
+			"extensions": [
+				"ms-azuretools.vscode-docker",
+				"davidanson.vscode-markdownlint",
+				"editorconfig.editorconfig",
+				"esbenp.prettier-vscode",
+				"mikestead.dotenv",
+				"iliazeus.vscode-ansi",
+				"VisualStudioExptTeam.vscodeintellicode",
+				"foxundermoon.shell-format",
+				"github.vscode-github-actions"
+			]
+		}
+	},
+	"remoteEnv": {
+		"HISTFILE": "/root/.bashcfg/.bash_history",
+		"GITHUB_TOKEN": "${localEnv:GITHUB_TOKEN}"
+	}
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+	// Use 'postCreateCommand' to run commands after the container is created
+}

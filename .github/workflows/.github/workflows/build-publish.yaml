@@ -1,0 +1,190 @@
+# Reusable workflow for building and publishing container images
+name: Build and publish Dev Container Image
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        required: true
+        type: string
+        description: |
+          The name of the Docker image that this workflow builds.
+      platforms:
+        default: "linux/amd64,linux/arm64"
+        required: false
+        type: string
+        description: |
+          A comma sepparated set of platforms to build for. For example: 'linux/amd64[,linux/arm64]'. By default: 'linux/amd64,linux/arm64'.
+      registry:
+        description: |
+          A domain provided by the caller workflow.
+        required: true
+        type: string
+      workspace-folder:
+        default: "."
+        required: false
+        type: string
+        description: |
+          The folder that contains the source code for the application. By default: '.devcontainer/'
+    secrets:
+      registry-password:
+        description: |
+          A password provided by the caller workflow.
+        required: true
+      registry-username:
+        description: |
+          A username provided by the caller workflow.
+        required: true
+
+# Limit the number of concurrent jobs for the specific workflow
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.platform.outputs.result }}
+    steps:
+      - id: platform
+        run: echo "result=$(echo '"${{ inputs.platforms }}"' | jq -c 'split(",")')" >> "$GITHUB_OUTPUT"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{fromJson(needs.setup.outputs.platform)}}
+
+    # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+      #
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # This step uses [docker/metadata-action](https://github.com/docker/metadata-action#about) to extract tags and labels that will be applied to the specified image. The `id` "meta" allows the output of this step to be referenced in a subsequent step. The `images` value provides the base name for the tags and labels.
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image-name }}
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=schedule
+            type=ref,event=branch,enable=${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Uses the `docker/login-action` action to log in to the Container registry registry using the account and password that will publish the packages. Once published, the packages are scoped to the account defined here.
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      - uses: actions/setup-node@v4
+      - run: npm install -g @devcontainers/cli
+
+      - name: Build Dev Container
+        id: build
+        run: |
+          # Build the image
+          devcontainer build \
+            --workspace-folder ${{ inputs.workspace-folder }} \
+            $(jq -cr '.tags | map("--image-name " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            --platform ${{ matrix.platform }} \
+            --push
+
+          # Transform platform name
+          echo "platform=$(echo "${{ matrix.platform }}" | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+          # Capture the image digest SHA256
+          echo "digest=$(docker buildx imagetools inspect ${{ inputs.registry }}/${{ inputs.image-name }}:${{ steps.meta.outputs.version }} --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+
+      # This step generates an artifact attestation for the image, which is an unforgeable statement about where and how it was built. It increases supply chain security for people who consume the image. For more information, see "[AUTOTITLE](/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)."
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ inputs.registry }}/${{ inputs.image-name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ steps.build.outputs.platform }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image-name }}
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=schedule
+            type=ref,event=branch,enable=${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ inputs.registry }}/${{ inputs.image-name }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ inputs.registry }}/${{ inputs.image-name }}:${{ steps.meta.outputs.version }}

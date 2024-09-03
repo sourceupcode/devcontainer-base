@@ -1,0 +1,36 @@
+#
+name: Build and publish Dev Container Image
+
+# Configures this workflow to run every time a change is pushed to the branch called `release`.
+on:
+  pull_request:
+    branches: # Only PRs that target the following branches.
+      - "main"
+    paths:
+      - .github/workflows/*.yml
+      - .devcontainer/**
+  push:
+    branches:
+      - "main"
+    paths:
+      - .github/workflows/*.yml
+      - .devcontainer/**
+
+# This workflow references a reusable workflow for devcontainers
+jobs:
+  build-publish-dev-container:
+    uses: ./.github/workflows/build-publish.yml
+    # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write
+    with:
+      image-name: ${{ github.repository }}
+      platforms: "linux/amd64,linux/arm64" # An example of how to set multiple platforms. Default is "linux/amd64"
+      registry: ghcr.io
+      workspace-folder: "./"
+    secrets:
+      registry-username: ${{ github.actor }}
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
